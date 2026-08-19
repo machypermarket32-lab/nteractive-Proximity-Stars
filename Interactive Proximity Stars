@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+
+    <title>Interactive Proximity Stars</title>
+
+    
+
+    <!-- PWA Metadata -->
+
+    <link rel="manifest" href="manifest.json">
+
+    <meta name="theme-color" content="#03030c">
+
+    <meta name="apple-mobile-web-app-capable" content="yes">
+
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <meta name="apple-mobile-web-app-title" content="Stars">
+
+
+
+    <style>
+
+        * {
+
+            margin: 0;
+
+            padding: 0;
+
+            box-sizing: border-box;
+
+        }
+
+        body, html {
+
+            width: 100%;
+
+            height: 100%;
+
+            overflow: hidden;
+
+            background-color: #03030c;
+
+            font-family: system-ui, -apple-system, sans-serif;
+
+        }
+
+        canvas {
+
+            display: block;
+
+            width: 100vw;
+
+            height: 100vh;
+
+        }
+
+        .title {
+
+            position: absolute;
+
+            top: 25px;
+
+            left: 30px;
+
+            color: rgba(255, 255, 255, 0.4);
+
+            font-size: 28px;
+
+            font-weight: 300;
+
+            letter-spacing: 1px;
+
+            pointer-events: none;
+
+            user-select: none;
+
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+
+
+    <div class="title">Interactive Proximity Stars</div>
+
+    <canvas id="canvas"></canvas>
+
+
+
+    <script>
+
+        // Service Worker Registration
+
+        if ('serviceWorker' in navigator) {
+
+            window.addEventListener('load', () => {
+
+                navigator.serviceWorker.register('./sw.js')
+
+                    .then(reg => console.log('SW registered!'))
+
+                    .catch(err => console.error('SW registration failed:', err));
+
+            });
+
+        }
+
+
+
+        const canvas = document.getElementById('canvas');
+
+        const ctx = canvas.getContext('2d');
+
+
+
+        let width, height, dpr;
+
+        let stars = [];
+
+        const numStars = 3500;
+
+        const maxRadius = 14;
+
+        const minRadius = 1.2;
+
+        const interactionRadius = 20;
+
+        const interactionRadiusSq = interactionRadius * interactionRadius;
+
+
+
+        const cellSize = interactionRadius;
+
+        let grid = {};
+
+
+
+        let mouse = { x: -1000, y: -1000 };
+
+
+
+        let bgCanvas = document.createElement('canvas');
+
+        let bgCtx = bgCanvas.getContext('2d');
+
+
+
+        function generateSpaceBackground() {
+
+            bgCanvas.width = width * dpr;
+
+            bgCanvas.height = height * dpr;
+
+            bgCtx.scale(dpr, dpr);
+
+
+
+            const baseGrad = bgCtx.createRadialGradient(
+
+                width * 0.5, height * 0.5, 100,
+
+                width * 0.5, height * 0.5, Math.max(width, height)
+
+            );
+
+            baseGrad.addColorStop(0, '#0c102b');
+
+            baseGrad.addColorStop(0.5, '#070a1e');
+
+            baseGrad.addColorStop(1, '#020308');
+
+            bgCtx.fillStyle = baseGrad;
+
+            bgCtx.fillRect(0, 0, width, height);
+
+
+
+            const createNebula = (x, y, radius, colorStops) => {
+
+                const grad = bgCtx.createRadialGradient(x, y, 0, x, y, radius);
+
+                colorStops.forEach(stop => grad.addColorStop(stop.offset, stop.color));
+
+                bgCtx.fillStyle = grad;
+
+                bgCtx.beginPath();
+
+                bgCtx.arc(x, y, radius, 0, Math.PI * 2);
+
+                bgCtx.fill();
+
+            };
+
+
+
+            createNebula(width * 0.75, height * 0.55, width * 0.45, [
+
+                { offset: 0, color: 'rgba(76, 29, 149, 0.18)' },
+
+                { offset: 0.5, color: 'rgba(88, 28, 135, 0.08)' },
+
+                { offset: 1, color: 'rgba(0, 0, 0, 0)' }
+
+            ]);
+
+
+
+            createNebula(width * 0.25, height * 0.35, width * 0.4, [
+
+                { offset: 0, color: 'rgba(14, 116, 144, 0.15)' },
+
+                { offset: 0.6, color: 'rgba(30, 58, 138, 0.06)' },
+
+                { offset: 1, color: 'rgba(0, 0, 0, 0)' }
+
+            ]);
+
+
+
+            bgCtx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+
+            for (let i = 0; i < 800; i++) {
+
+                const x = Math.random() * width;
+
+                const y = Math.random() * height;
+
+                const r = Math.random() * 0.8;
+
+                bgCtx.fillRect(x, y, r, r);
+
+            }
+
+        }
+
+
+
+        function resize() {
+
+            dpr = window.devicePixelRatio || 1;
+
+            width = window.innerWidth;
+
+            height = window.innerHeight;
+
+
+
+            canvas.width = width * dpr;
+
+            canvas.height = height * dpr;
+
+            ctx.scale(dpr, dpr);
+
+
+
+            generateSpaceBackground();
+
+            initStars();
+
+        }
+
+
+
+        function initStars() {
+
+            stars = [];
+
+            grid = {};
+
+
+
+            for (let i = 0; i < numStars; i++) {
+
+                const star = {
+
+                    x: Math.random() * width,
+
+                    y: Math.random() * height,
+
+                    baseRadius: minRadius + Math.random() * 0.8,
+
+                    isNear: false,
+
+                    factor: 0,
+
+                    rotation: Math.random() * Math.PI
+
+                };
+
+                stars.push(star);
+
+
+
+                const col = Math.floor(star.x / cellSize);
+
+                const row = Math.floor(star.y / cellSize);
+
+                const cellKey = `${col},${row}`;
+
+                if (!grid[cellKey]) grid[cellKey] = [];
+
+                grid[cellKey].push(star);
+
+            }
+
+        }
+
+
+
+        function drawStarPath(targetCtx, x, y, radius, rotation) {
+
+            const points = 5;
+
+            const innerRadius = radius * 0.45;
+
+            const step = Math.PI / points;
+
+
+
+            targetCtx.moveTo(
+
+                x + Math.cos(rotation) * radius,
+
+                y + Math.sin(rotation) * radius
+
+            );
+
+
+
+            for (let i = 0; i < 2 * points; i++) {
+
+                const r = (i % 2 === 0) ? radius : innerRadius;
+
+                const angle = rotation + i * step;
+
+                targetCtx.lineTo(
+
+                    x + Math.cos(angle) * r,
+
+                    y + Math.sin(angle) * r
+
+                );
+
+            }
+
+        }
+
+
+
+        function updateMousePos(e) {
+
+            const rect = canvas.getBoundingClientRect();
+
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+            mouse.x = clientX - rect.left;
+
+            mouse.y = clientY - rect.top;
+
+        }
+
+
+
+        function resetMouse() {
+
+            mouse.x = -1000;
+
+            mouse.y = -1000;
+
+        }
+
+
+
+        window.addEventListener('resize', resize);
+
+        window.addEventListener('mousemove', updateMousePos);
+
+        window.addEventListener('mouseleave', resetMouse);
+
+        window.addEventListener('touchstart', updateMousePos, { passive: true });
+
+        window.addEventListener('touchmove', updateMousePos, { passive: true });
+
+        window.addEventListener('touchend', resetMouse);
+
+
+
+        function animate() {
+
+            ctx.drawImage(bgCanvas, 0, 0, width, height);
+
+
+
+            for (let i = 0; i < stars.length; i++) {
+
+                stars[i].isNear = false;
+
+            }
+
+
+
+            if (mouse.x > 0 && mouse.y > 0) {
+
+                const mouseCol = Math.floor(mouse.x / cellSize);
+
+                const mouseRow = Math.floor(mouse.y / cellSize);
+
+
+
+                for (let c = mouseCol - 1; c <= mouseCol + 1; c++) {
+
+                    for (let r = mouseRow - 1; r <= mouseRow + 1; r++) {
+
+                        const cellKey = `${c},${r}`;
+
+                        const cellStars = grid[cellKey];
+
+                        if (cellStars) {
+
+                            for (let i = 0; i < cellStars.length; i++) {
+
+                                const star = cellStars[i];
+
+                                const dx = mouse.x - star.x;
+
+                                const dy = mouse.y - star.y;
+
+                                const distSq = dx * dx + dy * dy;
+
+
+
+                                if (distSq < interactionRadiusSq) {
+
+                                    const dist = Math.sqrt(distSq);
+
+                                    star.isNear = true;
+
+                                    star.factor = 1 - (dist / interactionRadius);
+
+                                }
+
+                            }
+
+                        }
+
+                    }
+
+                }
+
+
+
+                const lensGrad = ctx.createRadialGradient(
+
+                    mouse.x, mouse.y, 0,
+
+                    mouse.x, mouse.y, interactionRadius
+
+                );
+
+                lensGrad.addColorStop(0, 'rgba(56, 189, 248, 0.08)');
+
+                lensGrad.addColorStop(0.7, 'rgba(14, 116, 144, 0.03)');
+
+                lensGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+                ctx.fillStyle = lensGrad;
+
+                ctx.beginPath();
+
+                ctx.arc(mouse.x, mouse.y, interactionRadius, 0, Math.PI * 2);
+
+                ctx.fill();
+
+            }
+
+
+
+            ctx.fillStyle = 'rgba(186, 230, 253, 0.7)';
+
+            ctx.beginPath();
+
+            for (let i = 0; i < stars.length; i++) {
+
+                const star = stars[i];
+
+                if (star.isNear) continue;
+
+                drawStarPath(ctx, star.x, star.y, star.baseRadius, star.rotation);
+
+            }
+
+            ctx.fill();
+
+
+
+            ctx.shadowColor = '#38bdf8';
+
+            ctx.shadowBlur = 12;
+
+            ctx.fillStyle = '#e0f2fe';
+
+
+
+            ctx.beginPath();
+
+            for (let i = 0; i < stars.length; i++) {
+
+                const star = stars[i];
+
+                if (!star.isNear) continue;
+
+
+
+                const currentRadius = star.baseRadius + star.factor * (maxRadius - star.baseRadius);
+
+                drawStarPath(ctx, star.x, star.y, currentRadius, star.rotation);
+
+            }
+
+            ctx.fill();
+
+
+
+            ctx.shadowBlur = 0;
+
+
+
+            requestAnimationFrame(animate);
+
+        }
+
+
+
+        resize();
+
+        animate();
+
+    </script>
+
+</body>
+
+</html>
